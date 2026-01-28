@@ -1,0 +1,11 @@
+# Ignore everything by default
+*
+
+# Keep this .gitignore
+!.gitignore
+
+# Allow the two folders
+!mcp-server/
+!mcp-server/**
+!mcp-client/
+!mcp-client/**

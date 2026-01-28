@@ -1,0 +1,17 @@
+# Ignore everything by default
+*
+
+# Keep directories so we can reach files
+!*/
+
+# Allow this .gitignore
+!.gitignore
+
+# Allow Python source files
+!**/*.py
+
+# Allow README files
+!README*
+
+# Allow requirements files
+!requirements*.txt
