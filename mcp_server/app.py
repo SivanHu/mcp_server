@@ -1,0 +1,116 @@
+import json
+from typing import AsyncGenerator
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from sse_starlette.sse import EventSourceResponse
+
+from .db import get_tool, list_tools
+
+app = FastAPI(title="mcp-server")
+
+MCP_JSONRPC_VERSION = "2.0"
+
+
+def _to_mcp_tool(tool: dict) -> dict:
+    input_schema = tool.get("inputSchema") or {}
+    if not isinstance(input_schema, dict):
+        input_schema = {}
+    schema_type = input_schema.get("type")
+    if schema_type != "object":
+        schema_type = "object"
+    return {
+        "name": tool["tool_name"],
+        "description": tool.get("description") or "",
+        "inputSchema": {
+            "type": schema_type,
+            "properties": input_schema.get("properties") or {},
+            "required": input_schema.get("required") or [],
+        },
+    }
+
+
+def _jsonrpc_result(req_id: str | int | None, result: dict) -> JSONResponse:
+    return JSONResponse({"jsonrpc": MCP_JSONRPC_VERSION, "id": req_id, "result": result})
+
+
+def _jsonrpc_error(req_id: str | int | None, code: int, message: str) -> JSONResponse:
+    return JSONResponse({"jsonrpc": MCP_JSONRPC_VERSION, "id": req_id, "error": {"code": code, "message": message}})
+
+
+@app.get("/mcp/tools")
+def mcp_tools():
+    # Dynamic read from DB on each request
+    return {"tools": list_tools()}
+
+
+@app.get("/mcp/tools/{name}")
+def mcp_tool(name: str):
+    tool = get_tool(name)
+    if not tool:
+        raise HTTPException(status_code=404, detail="tool not found")
+    return tool
+
+
+@app.get("/mcp/sse")
+async def mcp_sse(tool_name: str | None = Query(None, description="Tool name")):
+    async def event_gen() -> AsyncGenerator[dict, None]:
+        if tool_name:
+            tool = get_tool(tool_name)
+            if not tool:
+                yield {"event": "error", "data": json.dumps({"error": "tool not found"})}
+                return
+            yield {"event": "tool", "data": json.dumps(tool)}
+            return
+        yield {"event": "tools", "data": json.dumps(list_tools())}
+
+    return EventSourceResponse(event_gen())
+
+
+@app.post("/mcp/streamable_http")
+async def mcp_streamable_http(
+    request: Request, tool_name: str | None = Query(None, description="Tool name")
+):
+    # If Cherry Studio posts JSON-RPC, respond with a single JSON object (not a stream).
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+
+    if isinstance(body, dict) and "method" in body:
+        req_id = body.get("id")
+        method = body.get("method")
+        if method in ("initialize", "mcp:initialize"):
+            # Minimal MCP initialize response
+            return _jsonrpc_result(
+                req_id,
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {},
+                    },
+                    "serverInfo": {"name": "mcp-server", "version": "0.1.0"},
+                },
+            )
+        if method in ("notifications/initialized", "mcp:initialized"):
+            return _jsonrpc_result(req_id, {})
+        if method in ("mcp:list-tools", "tools/list"):
+            tools = [_to_mcp_tool(t) for t in list_tools()]
+            return _jsonrpc_result(req_id, {"tools": tools})
+        return _jsonrpc_error(req_id, -32601, f"Method not found: {method}")
+
+    if tool_name:
+        tool = get_tool(tool_name)
+        if not tool:
+            return JSONResponse(status_code=404, content={"error": "tool not found"})
+        payload = {"type": "tool", "data": tool}
+    else:
+        payload = {"type": "tools", "data": list_tools()}
+
+    async def body() -> AsyncGenerator[bytes, None]:
+        # Stream in chunks to simulate streamable HTTP
+        yield json.dumps({"type": "start"}).encode("utf-8") + b"\n"
+        yield json.dumps(payload).encode("utf-8") + b"\n"
+        yield json.dumps({"type": "end"}).encode("utf-8") + b"\n"
+
+    return StreamingResponse(body(), media_type="application/json")
