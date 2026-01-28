@@ -1,8 +1,9 @@
 import json
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+import httpx
 from sse_starlette.sse import EventSourceResponse
 
 from .db import get_tool, list_tools
@@ -36,6 +37,63 @@ def _jsonrpc_result(req_id: str | int | None, result: dict) -> JSONResponse:
 
 def _jsonrpc_error(req_id: str | int | None, code: int, message: str) -> JSONResponse:
     return JSONResponse({"jsonrpc": MCP_JSONRPC_VERSION, "id": req_id, "error": {"code": code, "message": message}})
+
+
+async def _call_tool_http(tool: dict, arguments: dict | None) -> dict:
+    url = tool.get("req_url")
+    if not url:
+        return {
+            "content": [{"type": "text", "text": "Tool is missing req_url"}],
+            "isError": True,
+        }
+
+    method = (tool.get("req_method") or "POST").upper()
+    headers = tool.get("req_header") or {}
+    if not isinstance(headers, dict):
+        headers = {}
+
+    params = None
+    json_body = None
+    if method in {"GET", "DELETE"}:
+        params = arguments or {}
+    else:
+        json_body = arguments or {}
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.request(
+                method,
+                url,
+                headers=headers,
+                params=params,
+                json=json_body,
+            )
+        structured: dict[str, Any] | None = None
+        text = resp.text
+        try:
+            data = resp.json()
+            structured = data if isinstance(data, dict) else {"data": data}
+            text = json.dumps(data, ensure_ascii=False)
+        except Exception:
+            pass
+
+        if resp.is_error:
+            return {
+                "content": [{"type": "text", "text": f"HTTP {resp.status_code}: {text}"}],
+                "structuredContent": structured,
+                "isError": True,
+            }
+
+        return {
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": structured,
+            "isError": False,
+        }
+    except Exception as exc:
+        return {
+            "content": [{"type": "text", "text": f"Request failed: {exc}"}],
+            "isError": True,
+        }
 
 
 @app.get("/mcp/tools")
@@ -97,6 +155,17 @@ async def mcp_streamable_http(
         if method in ("mcp:list-tools", "tools/list"):
             tools = [_to_mcp_tool(t) for t in list_tools()]
             return _jsonrpc_result(req_id, {"tools": tools})
+        if method in ("tools/call",):
+            params = body.get("params") or {}
+            name = params.get("name")
+            arguments = params.get("arguments") or {}
+            if not name:
+                return _jsonrpc_error(req_id, -32602, "Missing tool name")
+            tool = get_tool(name)
+            if not tool:
+                return _jsonrpc_error(req_id, -32602, f"Tool not found: {name}")
+            result = await _call_tool_http(tool, arguments)
+            return _jsonrpc_result(req_id, result)
         return _jsonrpc_error(req_id, -32601, f"Method not found: {method}")
 
     if tool_name:

@@ -9,3 +9,6 @@
 !mcp-server/**
 !mcp-client/
 !mcp-client/**
+
+# Allow standalone add API
+!add_api.py
