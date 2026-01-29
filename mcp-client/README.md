@@ -38,3 +38,17 @@ Optional:
 - `--model` to choose an LLM model (default: gpt-4o-mini)
 - `--base-url` to use an OpenAI-compatible endpoint (or set `OPENAI_BASE_URL`)
 - `--max-steps` to control tool-calling rounds
+
+## Fixed pipeline (no ReAct, tool order is preset)
+
+Configure pipelines in `pipelines.json`, then run:
+
+```bash
+export OPENAI_API_KEY=YOUR_KEY
+python pipeline_agent.py --url http://127.0.0.1:8000/mcp/streamable_http \
+  --input "请把1和2相加"
+```
+
+Optional:
+- `--pipeline` to force a specific pipeline by name
+- `--pipelines` to use a different config file

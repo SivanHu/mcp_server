@@ -1,0 +1,36 @@
+{
+  "pipelines": [
+    {
+      "name": "sales_report",
+      "keywords": ["报表", "销售"],
+      "steps": [
+        {
+          "name": "A",
+          "tool": "fetch_sales",
+          "extract_prompt": "从用户输入提取时间范围，输出JSON: {\"start_date\": \"YYYY-MM-DD\", \"end_date\": \"YYYY-MM-DD\"}"
+        },
+        {
+          "name": "B",
+          "tool": "summarize_sales",
+          "extract_prompt": "结合用户输入与A输出，提取汇总维度，输出JSON: {\"group_by\": \"day|week|month\"}"
+        },
+        {
+          "name": "C",
+          "tool": "generate_report",
+          "extract_prompt": "基于用户输入与A/B输出，输出JSON: {\"format\": \"pdf|xlsx\", \"title\": \"...\"}"
+        }
+      ]
+    },
+    {
+      "name": "math_add",
+      "keywords": ["加", "相加", "sum", "add"],
+      "steps": [
+        {
+          "name": "A",
+          "tool": "add_numbers",
+          "extract_prompt": "从用户输入提取两个数字，输出JSON: {\"a\": number, \"b\": number}"
+        }
+      ]
+    }
+  ]
+}
