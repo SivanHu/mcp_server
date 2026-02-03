@@ -1,4 +1,6 @@
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -11,6 +13,24 @@ from .db import get_tool, list_tools
 app = FastAPI(title="mcp-server")
 
 MCP_JSONRPC_VERSION = "2.0"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("mcp-server")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    file_handler = RotatingFileHandler(
+        "mcp_server.log", maxBytes=5 * 1024 * 1024, backupCount=3
+    )
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+    logger.propagate = False
 
 
 def _to_mcp_tool(tool: dict) -> dict:
@@ -59,6 +79,16 @@ async def _call_tool_http(tool: dict, arguments: dict | None) -> dict:
     else:
         json_body = arguments or {}
 
+    logger.info(
+        "tool_request tool=%s method=%s url=%s headers=%s params=%s json=%s",
+        tool.get("tool_name"),
+        method,
+        url,
+        json.dumps(headers, ensure_ascii=False),
+        json.dumps(params, ensure_ascii=False) if params is not None else None,
+        json.dumps(json_body, ensure_ascii=False) if json_body is not None else None,
+    )
+
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.request(
@@ -78,18 +108,31 @@ async def _call_tool_http(tool: dict, arguments: dict | None) -> dict:
             pass
 
         if resp.is_error:
+            logger.info(
+                "tool_response tool=%s status=%s error=true body=%s",
+                tool.get("tool_name"),
+                resp.status_code,
+                text,
+            )
             return {
                 "content": [{"type": "text", "text": f"HTTP {resp.status_code}: {text}"}],
                 "structuredContent": structured,
                 "isError": True,
             }
 
+        logger.info(
+            "tool_response tool=%s status=%s error=false body=%s",
+            tool.get("tool_name"),
+            resp.status_code,
+            text,
+        )
         return {
             "content": [{"type": "text", "text": text}],
             "structuredContent": structured,
             "isError": False,
         }
     except Exception as exc:
+        logger.exception("tool_response tool=%s error=true exception=%s", tool.get("tool_name"), exc)
         return {
             "content": [{"type": "text", "text": f"Request failed: {exc}"}],
             "isError": True,
@@ -164,7 +207,17 @@ async def mcp_streamable_http(
             tool = get_tool(name)
             if not tool:
                 return _jsonrpc_error(req_id, -32602, f"Tool not found: {name}")
+            logger.info(
+                "tool_call name=%s args=%s",
+                name,
+                json.dumps(arguments, ensure_ascii=False),
+            )
             result = await _call_tool_http(tool, arguments)
+            logger.info(
+                "tool_result name=%s result=%s",
+                name,
+                json.dumps(result, ensure_ascii=False),
+            )
             return _jsonrpc_result(req_id, result)
         return _jsonrpc_error(req_id, -32601, f"Method not found: {method}")
 
